@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -78,7 +79,7 @@ func init() {
 	http.Handle("/tasks/process", appHandler(processTasks))
 }
 
-// Get latest images from Imgur
+// Get popular images from Imgur
 // https://api.imgur.com/endpoints/gallery
 func pollImgur(w http.ResponseWriter, r *http.Request) error {
 	ctx := appengine.NewContext(r)
@@ -148,6 +149,61 @@ func pollImgur(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+func downloadImage(ctx appengine.Context, result *Result) (image []byte, err error) {
+	var file string
+	if result.Cover != "" {
+		file = "http://i.imgur.com/" + result.Cover + ".jpg"
+	} else {
+		file = result.Link
+	}
+	req, err := http.NewRequest("GET", file, nil)
+	if err != nil {
+		ctx.Errorf("Unable to create request: %s", err)
+	}
+	client := &http.Client{
+		Transport: &urlfetch.Transport{Context: ctx, Deadline: 10 * time.Second},
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer response.Body.Close()
+	image, err = ioutil.ReadAll(response.Body)
+	if err != nil {
+		ctx.Errorf("Error reading response for file %s", file)
+	}
+	return
+}
+
+func generateStatus(result *Result, tooLarge bool) (status string) {
+	titleLength := 105
+
+	// Images can't be more than 3 MB, so we shorten the title a little bit
+	// to add room for the link to the image
+	if tooLarge {
+		titleLength -= 31
+	}
+
+	title := result.Title
+	if len(title) > titleLength {
+		title = title[:titleLength-1] + "…"
+	}
+	var link string
+	if result.Cover != "" {
+		link = fmt.Sprintf("http://i.imgur.com/%s.jpg", result.Cover)
+	} else {
+		link = result.Link
+	}
+
+	status = title
+	if tooLarge {
+		status += fmt.Sprintf(" %s", link)
+	}
+	status += fmt.Sprintf(" (http://imgur.com/gallery/%s)", result.ID)
+
+	return
+}
+
 func processTasks(w http.ResponseWriter, r *http.Request) error {
 	ctx := appengine.NewContext(r)
 	tasks, err := taskqueue.Lease(ctx, 20, "pull-queue", 30)
@@ -155,10 +211,8 @@ func processTasks(w http.ResponseWriter, r *http.Request) error {
 		ctx.Errorf("Unable to lease tasks from pull-queue: %s", err)
 		return err
 	}
-	// ctx.Infof("Length of tasks %d", len(tasks))
 
 	for _, task := range tasks {
-		// ctx.Infof("Processing task %s", task.Name)
 		var result *Result
 		err = json.Unmarshal(task.Payload, &result)
 		if err != nil {
@@ -166,56 +220,22 @@ func processTasks(w http.ResponseWriter, r *http.Request) error {
 			continue
 		}
 
-		// download image
-		// var file string
-		// if result.Cover != "" {
-		// 	file = "http://i.imgur.com/" + result.Cover + ".jpg"
-		// } else {
-		// 	file = result.Link
-		// }
-		// req, err := http.NewRequest("GET", file, nil)
-		// if err != nil {
-		// 	ctx.Errorf("Unable to create request: %s", err)
-		// }
-		// client := &http.Client{
-		// 	Transport: &urlfetch.Transport{Context: ctx, Deadline: 10 * time.Second},
-		// }
-		// response, err := client.Do(req)
-		// if err != nil {
-		// 	ctx.Errorf("Error while downloading %s: %s", file, err)
-		// 	continue
-		// }
-		// defer response.Body.Close()
-		// image, err := ioutil.ReadAll(response.Body)
-		// if err != nil {
-		// 	ctx.Errorf("Error reading response for file %s", file)
-		// 	continue
-		// }
-		// media := &tweetlib.TweetMedia{result.ID + ".jpg", image}
-		// // Images can't be more than 3 MB
-		// if len(image) > 3000000 {
-		// 	media = nil
-		// }
-		media := &tweetlib.TweetMedia{result.ID + ".jpg", []byte{}}
-		media = nil
+		image, err := downloadImage(ctx, result)
+		if err != nil {
+			ctx.Errorf(err.Error())
+			continue
+		}
 
-		title := result.Title
-		titleLength := 91
-		if len(title) > titleLength {
-			title = title[:titleLength-1] + "…"
+		media := &tweetlib.TweetMedia{result.ID + ".jpg", image}
+		tooLarge := false
+		if len(image) > 3000000 {
+			media = nil
+			tooLarge = true
 		}
-		var link string
-		if result.Cover != "" {
-			link = fmt.Sprintf("http://i.imgur.com/%s.jpg", result.Cover)
-		} else {
-			link = result.Link
-		}
-		status := fmt.Sprintf("%s %s (https://imgur.com/gallery/%s)", title, link, result.ID)
-		// if media == nil {
-		// 	status += " " + result.Link
-		// }
+
+		status := generateStatus(result, tooLarge)
+
 		_, err = postTweet(ctx, status, media)
-		ctx.Infof("%#v\n", err)
 		if err != nil {
 			ctx.Errorf("Unable to post tweet %s", err)
 			continue
@@ -240,7 +260,6 @@ func processTasks(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// Tweet a result
 func postTweet(ctx appengine.Context, status string, image *tweetlib.TweetMedia) (tweet *tweetlib.Tweet, err error) {
 	tweetlibConfig := &tweetlib.Config{
 		ConsumerKey:    config.TwitterAPIKey,
