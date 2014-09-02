@@ -20,7 +20,7 @@ import (
 
 var (
 	twitterClient *tweetlib.Client
-	imgurURL      = "https://api.imgur.com/3/gallery/hot/viral/0.json"
+	imgurURL      = "https://api.imgur.com/3/gallery/hot/top/0.json"
 )
 
 var config struct {
