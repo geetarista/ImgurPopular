@@ -220,14 +220,16 @@ func processTasks(w http.ResponseWriter, r *http.Request) error {
 			continue
 		}
 
-		image, err := downloadImage(ctx, result)
-		if err != nil {
-			ctx.Errorf(err.Error())
-			continue
-		}
+		// image, err := downloadImage(ctx, result)
+		// if err != nil {
+		// 	ctx.Errorf(err.Error())
+		// 	continue
+		// }
 
+		image := []byte{}
 		media := &tweetlib.TweetMedia{result.ID + ".jpg", image}
-		tooLarge := false
+		// tooLarge := false
+		tooLarge := true
 		if len(image) > 3000000 {
 			media = nil
 			tooLarge = true
