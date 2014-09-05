@@ -277,7 +277,7 @@ func postTweet(ctx appengine.Context, status string, image *tweetlib.TweetMedia)
 	tr := &tweetlib.Transport{
 		Config:    tweetlibConfig,
 		Token:     token,
-		Transport: &urlfetch.Transport{Context: ctx},
+		Transport: &urlfetch.Transport{Context: ctx, Deadline: 10 * time.Second},
 	}
 
 	twitterClient, err = tweetlib.New(tr.Client())
