@@ -228,6 +228,7 @@ func processTasks(w http.ResponseWriter, r *http.Request) error {
 
 		image := []byte{}
 		media := &tweetlib.TweetMedia{result.ID + ".jpg", image}
+		media = nil
 		// tooLarge := false
 		tooLarge := true
 		if len(image) > 3000000 {
