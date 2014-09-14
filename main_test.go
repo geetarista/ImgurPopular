@@ -9,7 +9,7 @@ var (
 	id         = "abcd123"
 	cover      = "123abcd"
 	gallery    = fmt.Sprintf("http://imgur.com/gallery/%s", id)
-	longTitle  = "Some really awesome image that I found the other day. It was so much super amazingness."
+	longTitle  = "Some really awesome image that I found the other day. It was so much amazingness."
 	shortTitle = "Some really awesome image."
 	cutTitle   = longTitle[0:73] + "…"
 )

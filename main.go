@@ -44,6 +44,7 @@ type Result struct {
 	Title string `json:"title"`
 	Cover string `json:"cover,omitempty"`
 	Link  string `json:"link,omitempty"`
+	Size  int    `json:"size,omitempty"`
 }
 
 type ResultList []*Result
@@ -116,7 +117,6 @@ func pollImgur(w http.ResponseWriter, r *http.Request) error {
 	// Reverse the results since oldest is last
 	for i := len(results.Data) - 1; i > -1; i-- {
 		result := results.Data[i]
-		// ctx.Infof("Processing result with ID %s", result.ID)
 		if _, err := memcache.Get(ctx, result.ID); err == memcache.ErrCacheMiss {
 			// not in cache--do nothing
 		} else if err != nil {
@@ -149,13 +149,18 @@ func pollImgur(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func downloadImage(ctx appengine.Context, result *Result) (image []byte, err error) {
+func buildMedia(ctx appengine.Context, result *Result) (media *tweetlib.TweetMedia, err error) {
+	if result.Size > 3000000 {
+		return nil, nil
+	}
+
 	var file string
 	if result.Cover != "" {
 		file = "http://i.imgur.com/" + result.Cover + ".jpg"
 	} else {
 		file = result.Link
 	}
+
 	req, err := http.NewRequest("GET", file, nil)
 	if err != nil {
 		ctx.Errorf("Unable to create request: %s", err)
@@ -168,20 +173,26 @@ func downloadImage(ctx appengine.Context, result *Result) (image []byte, err err
 		return
 	}
 	defer response.Body.Close()
-	image, err = ioutil.ReadAll(response.Body)
+
+	image, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		ctx.Errorf("Error reading response for file %s", file)
 	}
+
+	media = &tweetlib.TweetMedia{result.ID + ".jpg", image}
+
 	return
 }
 
 func generateStatus(result *Result, tooLarge bool) (status string) {
 	titleLength := 105
 
-	// Images can't be more than 3 MB, so we shorten the title a little bit
-	// to add room for the link to the image
+	// Images can't be more than 3 MB on Twitter, so we shorten the title
+	// a little bit to add room for the link to the image
 	if tooLarge {
 		titleLength -= 31
+	} else {
+		titleLength -= 23 // characters_reserved_per_media Twitter
 	}
 
 	title := result.Title
@@ -220,27 +231,18 @@ func processTasks(w http.ResponseWriter, r *http.Request) error {
 			continue
 		}
 
-		// image, err := downloadImage(ctx, result)
-		// if err != nil {
-		// 	ctx.Errorf(err.Error())
-		// 	continue
-		// }
-
-		image := []byte{}
-		media := &tweetlib.TweetMedia{result.ID + ".jpg", image}
-		media = nil
-		// tooLarge := false
-		tooLarge := true
-		if len(image) > 3000000 {
-			media = nil
-			tooLarge = true
+		media, err := buildMedia(ctx, result)
+		if err != nil {
+			ctx.Errorf(err.Error())
+			continue
 		}
 
-		status := generateStatus(result, tooLarge)
+		status := generateStatus(result, media == nil)
 
 		_, err = postTweet(ctx, status, media)
 		if err != nil {
-			ctx.Errorf("Unable to post tweet %s", err)
+			ctx.Errorf("Unable to post tweet [%s %s]: %s", task.Name, status, err)
+
 			continue
 		}
 
@@ -260,6 +262,7 @@ func processTasks(w http.ResponseWriter, r *http.Request) error {
 			continue
 		}
 	}
+
 	return nil
 }
 
@@ -277,7 +280,7 @@ func postTweet(ctx appengine.Context, status string, image *tweetlib.TweetMedia)
 	tr := &tweetlib.Transport{
 		Config:    tweetlibConfig,
 		Token:     token,
-		Transport: &urlfetch.Transport{Context: ctx, Deadline: 10 * time.Second},
+		Transport: &urlfetch.Transport{Context: ctx, Deadline: 30 * time.Second},
 	}
 
 	twitterClient, err = tweetlib.New(tr.Client())
@@ -285,6 +288,7 @@ func postTweet(ctx appengine.Context, status string, image *tweetlib.TweetMedia)
 		ctx.Errorf("Error creating tweetlib client: %s", err)
 		return
 	}
+
 	if image == nil {
 		return twitterClient.Tweets.Update(status, nil)
 	} else {
