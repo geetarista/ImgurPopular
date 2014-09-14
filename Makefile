@@ -4,9 +4,13 @@ OK_COLOR=\033[32;01m
 WARN_COLOR=\033[33;01m
 DEPS = $(go list -f '{{range .TestImports}}{{.}} {{end}}' ./...)
 
-deploy:
+deploy: test
 	@echo "$(OK_COLOR)==> Deploying...$(NO_COLOR)"
 	@appcfg.py --oauth2 update .
+
+rollback:
+	@echo "$(OK_COLOR)==> Rolling back...$(NO_COLOR)"
+	@appcfg.py --oauth2 rollback .
 
 deps:
 	@echo "$(OK_COLOR)==> Installing dependencies...$(NO_COLOR)"
