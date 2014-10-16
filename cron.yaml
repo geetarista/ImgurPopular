@@ -1,5 +1,8 @@
 ---
 cron:
+  - description: update limits
+    url: /tasks/limits
+    schedule: every 1 minutes
   - description: poll imgur
     url: /tasks/poll
     schedule: every 1 minutes

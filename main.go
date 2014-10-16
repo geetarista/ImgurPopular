@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"gopkg.in/tweetlib.v2"
@@ -19,8 +20,13 @@ import (
 )
 
 var (
-	twitterClient *tweetlib.Client
-	imgurURL      = "https://api.imgur.com/3/gallery/top/top/0.json"
+	charactersReservedPerMedia int
+	rateLimit                  = 180
+	twitterClient              *tweetlib.Client
+	twitterConfig              *tweetlib.Config
+	twitterToken               *tweetlib.Token
+	twitterTransport           *tweetlib.Transport
+	imgurURL                   = "https://api.imgur.com/3/gallery/top/top/0.json"
 )
 
 var config struct {
@@ -32,25 +38,25 @@ var config struct {
 	TwitterAccessTokenSecret string `json:"twitterAccessTokenSecret"`
 }
 
-type Image struct {
-	ID   string `json:"id"`
-	Link string `json:"link"`
+type image struct {
+	Data []byte
 }
 
 // https://api.imgur.com/models/gallery_image
 // https://api.imgur.com/models/gallery_album
-type Result struct {
+type result struct {
 	ID    string `json:"id"`
-	Title string `json:"title"`
 	Cover string `json:"cover,omitempty"`
 	Link  string `json:"link,omitempty"`
+	NSFW  bool   `json:"nsfw,omitempty"`
 	Size  int    `json:"size,omitempty"`
+	Title string `json:"title"`
 }
 
-type ResultList []*Result
+type resultList []*result
 
-type Results struct {
-	Data    ResultList `json:"data"`
+type results struct {
+	Data    resultList `json:"data"`
 	Success bool       `json:"success"`
 	Status  int32      `json:"status"`
 }
@@ -76,8 +82,35 @@ func init() {
 		log.Println("Error reading conf.json:", err)
 	}
 
+	http.Handle("/tasks/limits", appHandler(updateLimits))
 	http.Handle("/tasks/poll", appHandler(pollImgur))
 	http.Handle("/tasks/process", appHandler(processTasks))
+}
+
+func updateLimits(w http.ResponseWriter, r *http.Request) error {
+	ctx := appengine.NewContext(r)
+
+	client, err := buildTwitterClient(ctx)
+	if err != nil {
+		ctx.Errorf("Error creating tweetlib client: %s", err)
+		return err
+	}
+
+	limits, err := client.Help.Limits()
+	if err != nil {
+		ctx.Errorf("Error getting Configuration: %s", err)
+		return err
+	}
+	rateLimit = limits.ResourceFamilies["application"]["/application/rate_limit_status"].Remaining
+
+	config, err := client.Help.Configuration()
+	if err != nil {
+		ctx.Errorf("Error getting Configuration: %s", err)
+		return err
+	}
+	charactersReservedPerMedia = config.CharactersReservedPerMedia
+
+	return nil
 }
 
 // Get popular images from Imgur
@@ -102,25 +135,25 @@ func pollImgur(w http.ResponseWriter, r *http.Request) error {
 	defer res.Body.Close()
 
 	decoder := json.NewDecoder(res.Body)
-	results := Results{}
-	err = decoder.Decode(&results)
+	rs := results{}
+	err = decoder.Decode(&rs)
 	if err != nil {
 		ctx.Errorf("Error decoding Imgur results:", err)
 		return err
 	}
 
-	if results.Success != true || results.Status != 200 {
+	if rs.Success != true || rs.Status != 200 {
 		ctx.Errorf("unsuccessful request to imgur")
 		return err
 	}
 
 	// Reverse the results since oldest is last
-	for i := len(results.Data) - 1; i > -1; i-- {
-		result := results.Data[i]
-		if _, err := memcache.Get(ctx, result.ID); err == memcache.ErrCacheMiss {
+	for i := len(rs.Data) - 1; i > -1; i-- {
+		r := rs.Data[i]
+		if _, err := memcache.Get(ctx, r.ID); err == memcache.ErrCacheMiss {
 			// not in cache--do nothing
 		} else if err != nil {
-			ctx.Errorf("error getting item with key %s: %v", result.ID, err)
+			ctx.Errorf("error getting item with key %s: %v", r.ID, err)
 			continue
 		} else {
 			// already in cache--skip
@@ -129,19 +162,20 @@ func pollImgur(w http.ResponseWriter, r *http.Request) error {
 
 		var data bytes.Buffer
 		enc := json.NewEncoder(&data)
-		err = enc.Encode(result)
+		err = enc.Encode(r)
 		if err != nil {
-			ctx.Errorf("Unable to encode result with ID %s", result.ID)
+			ctx.Errorf("Unable to encode result with ID %s", r.ID)
 			continue
 		}
 
 		t := &taskqueue.Task{
-			Name:    result.ID,
+			Name:    r.ID,
 			Payload: data.Bytes(),
 			Method:  "PULL",
+			Tag:     strconv.FormatBool(r.NSFW),
 		}
 		if _, err := taskqueue.Add(ctx, t, "pull-queue"); err != nil && err != taskqueue.ErrTaskAlreadyAdded {
-			ctx.Errorf("Unable to add task for ID %s: %s", result.ID, err)
+			ctx.Errorf("Unable to add task for ID %s: %s", r.ID, err)
 			continue
 		}
 	}
@@ -149,16 +183,39 @@ func pollImgur(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func buildMedia(ctx appengine.Context, result *Result) (media *tweetlib.TweetMedia, err error) {
-	if result.Size > 3000000 {
+func buildTwitterClient(ctx appengine.Context) (client *tweetlib.Client, err error) {
+	twitterConfig := &tweetlib.Config{
+		ConsumerKey:    config.TwitterAPIKey,
+		ConsumerSecret: config.TwitterAPISecret,
+	}
+
+	twitterToken := &tweetlib.Token{
+		OAuthToken:  config.TwitterAccessToken,
+		OAuthSecret: config.TwitterAccessTokenSecret,
+	}
+
+	twitterTransport := &tweetlib.Transport{
+		Config:    twitterConfig,
+		Token:     twitterToken,
+		Transport: &urlfetch.Transport{Context: ctx, Deadline: 30 * time.Second},
+	}
+
+	return tweetlib.New(twitterTransport.Client())
+}
+
+func buildMedia(ctx appengine.Context, r *result) (media *tweetlib.TweetMedia, err error) {
+	// ctx.Infof("Image size for %s: %d\n", r.ID, r.Size)
+	// Twitter only allows 3 MB files for media
+	// Sometimes the field is set, so assume too large
+	if r.Size > 3000000 || r.Size == 0 {
 		return nil, nil
 	}
 
 	var file string
-	if result.Cover != "" {
-		file = "http://i.imgur.com/" + result.Cover + ".jpg"
+	if r.Cover != "" {
+		file = "http://i.imgur.com/" + r.Cover + ".jpg"
 	} else {
-		file = result.Link
+		file = r.Link
 	}
 
 	req, err := http.NewRequest("GET", file, nil)
@@ -179,44 +236,53 @@ func buildMedia(ctx appengine.Context, result *Result) (media *tweetlib.TweetMed
 		ctx.Errorf("Error reading response for file %s", file)
 	}
 
-	media = &tweetlib.TweetMedia{result.ID + ".jpg", image}
+	media = &tweetlib.TweetMedia{r.ID, image}
 
 	return
 }
 
-func generateStatus(result *Result, tooLarge bool) (status string) {
+func generateStatus(r *result, tooLarge bool) (status string) {
 	titleLength := 105
 
 	// Images can't be more than 3 MB on Twitter, so we shorten the title
 	// a little bit to add room for the link to the image
 	if tooLarge {
+		// Make room for the amount of characters in a gallery link
 		titleLength -= 31
 	} else {
-		titleLength -= 23 // characters_reserved_per_media Twitter
+		// characters_reserved_per_media
+		// https://dev.twitter.com/rest/reference/post/statuses/update_with_media
+		titleLength -= charactersReservedPerMedia
 	}
 
-	title := result.Title
+	title := r.Title
 	if len(title) > titleLength {
 		title = title[:titleLength-1] + "…"
 	}
 	var link string
-	if result.Cover != "" {
-		link = fmt.Sprintf("http://i.imgur.com/%s.jpg", result.Cover)
+	if r.Cover != "" {
+		link = fmt.Sprintf("http://i.imgur.com/%s.jpg", r.Cover)
 	} else {
-		link = result.Link
+		link = r.Link
 	}
 
 	status = title
 	if tooLarge {
 		status += fmt.Sprintf(" %s", link)
 	}
-	status += fmt.Sprintf(" (http://imgur.com/gallery/%s)", result.ID)
+	status += fmt.Sprintf(" (http://imgur.com/gallery/%s)", r.ID)
 
 	return
 }
 
 func processTasks(w http.ResponseWriter, r *http.Request) error {
+	// Just wait if we're getting close to being rate-limited by Twitter
+	if rateLimit < 100 {
+		return nil
+	}
+
 	ctx := appengine.NewContext(r)
+
 	tasks, err := taskqueue.Lease(ctx, 20, "pull-queue", 30)
 	if err != nil {
 		ctx.Errorf("Unable to lease tasks from pull-queue: %s", err)
@@ -224,26 +290,26 @@ func processTasks(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	for _, task := range tasks {
-		var result *Result
-		err = json.Unmarshal(task.Payload, &result)
+		var r *result
+		err = json.Unmarshal(task.Payload, &r)
 		if err != nil {
 			ctx.Errorf("Unable to decode result with ID %s: %s", task.Name, err)
 			continue
 		}
 
-		media, err := buildMedia(ctx, result)
+		media, err := buildMedia(ctx, r)
 		if err != nil {
 			ctx.Errorf(err.Error())
 			continue
 		}
 
-		status := generateStatus(result, media == nil)
+		status := generateStatus(r, media == nil)
 
-		_, err = postTweet(ctx, status, media)
+		_, err = postTweet(ctx, status, media, task.Tag)
 		if err != nil {
-			ctx.Errorf("Unable to post tweet [%s %s]: %s", task.Name, status, err)
-
-			continue
+			ctx.Errorf("Unable to post tweet [%s] %s: %s", task.Name, status, err)
+			time.Sleep(15 * time.Minute)
+			return err
 		}
 
 		item := &memcache.Item{
@@ -266,32 +332,19 @@ func processTasks(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func postTweet(ctx appengine.Context, status string, image *tweetlib.TweetMedia) (tweet *tweetlib.Tweet, err error) {
-	tweetlibConfig := &tweetlib.Config{
-		ConsumerKey:    config.TwitterAPIKey,
-		ConsumerSecret: config.TwitterAPISecret,
-	}
-
-	token := &tweetlib.Token{
-		OAuthToken:  config.TwitterAccessToken,
-		OAuthSecret: config.TwitterAccessTokenSecret,
-	}
-
-	tr := &tweetlib.Transport{
-		Config:    tweetlibConfig,
-		Token:     token,
-		Transport: &urlfetch.Transport{Context: ctx, Deadline: 30 * time.Second},
-	}
-
-	twitterClient, err = tweetlib.New(tr.Client())
+func postTweet(ctx appengine.Context, status string, image *tweetlib.TweetMedia, sensitive string) (tweet *tweetlib.Tweet, err error) {
+	twitterClient, err := buildTwitterClient(ctx)
 	if err != nil {
 		ctx.Errorf("Error creating tweetlib client: %s", err)
 		return
 	}
 
+	opts := tweetlib.NewOptionals()
+	opts.Add("possibly_sensitive", sensitive == "true")
+
 	if image == nil {
 		return twitterClient.Tweets.Update(status, nil)
-	} else {
-		return twitterClient.Tweets.UpdateWithMedia(status, image, nil)
 	}
+
+	return twitterClient.Tweets.UpdateWithMedia(status, image, nil)
 }

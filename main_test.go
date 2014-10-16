@@ -16,14 +16,14 @@ var (
 
 func TestGenerateStatus_AlbumCoverTooLarge_ShortTitle(t *testing.T) {
 	link := fmt.Sprintf("http://i.imgur.com/%s.jpg", cover)
-	result := &Result{
+	r := &result{
 		ID:    id,
 		Cover: cover,
 		Title: shortTitle,
 	}
 
-	expected := fmt.Sprintf("%s %s (%s)", result.Title, link, gallery)
-	got := generateStatus(result, true)
+	expected := fmt.Sprintf("%s %s (%s)", r.Title, link, gallery)
+	got := generateStatus(r, true)
 
 	if len(got) > 142 {
 		t.Errorf("Title is longer than 140 characters: %d", len(got))
@@ -36,14 +36,14 @@ func TestGenerateStatus_AlbumCoverTooLarge_ShortTitle(t *testing.T) {
 
 func TestGenerateStatus_AlbumCoverTooLarge_LongTitle(t *testing.T) {
 	link := fmt.Sprintf("http://i.imgur.com/%s.jpg", cover)
-	result := &Result{
+	r := &result{
 		ID:    id,
 		Cover: cover,
 		Title: longTitle,
 	}
 
 	expected := fmt.Sprintf("%s %s (%s)", cutTitle, link, gallery)
-	got := generateStatus(result, true)
+	got := generateStatus(r, true)
 
 	if len(got) > 142 {
 		t.Errorf("Title is longer than 140 characters: %d", len(got))
@@ -55,14 +55,14 @@ func TestGenerateStatus_AlbumCoverTooLarge_LongTitle(t *testing.T) {
 }
 
 func TestGenerateStatus_AlbumCover_LongTitle(t *testing.T) {
-	result := &Result{
+	r := &result{
 		ID:    id,
 		Cover: cover,
 		Title: longTitle,
 	}
 
 	expected := fmt.Sprintf("%s (%s)", longTitle, gallery)
-	got := generateStatus(result, false)
+	got := generateStatus(r, false)
 
 	if len(got) > 142 {
 		t.Errorf("Title is longer than 140 characters: %d", len(got))
@@ -75,14 +75,14 @@ func TestGenerateStatus_AlbumCover_LongTitle(t *testing.T) {
 
 func TestGenerateStatus_AlbumLarge_LongTitle(t *testing.T) {
 	link := fmt.Sprintf("http://i.imgur.com/%s.jpg", id)
-	result := &Result{
+	r := &result{
 		ID:    id,
 		Link:  link,
 		Title: longTitle,
 	}
 
 	expected := fmt.Sprintf("%s %s (%s)", cutTitle, link, gallery)
-	got := generateStatus(result, true)
+	got := generateStatus(r, true)
 
 	if len(got) > 142 {
 		t.Errorf("Title is longer than 140 characters: %d", len(got))
@@ -95,14 +95,14 @@ func TestGenerateStatus_AlbumLarge_LongTitle(t *testing.T) {
 
 func TestGenerateStatus_AlbumLarge_ShortTitle(t *testing.T) {
 	link := fmt.Sprintf("http://i.imgur.com/%s.jpg", id)
-	result := &Result{
+	r := &result{
 		ID:    id,
 		Link:  link,
 		Title: shortTitle,
 	}
 
 	expected := fmt.Sprintf("%s %s (%s)", shortTitle, link, gallery)
-	got := generateStatus(result, true)
+	got := generateStatus(r, true)
 
 	if len(got) > 142 {
 		t.Errorf("Title is longer than 140 characters: %d", len(got))
@@ -115,14 +115,14 @@ func TestGenerateStatus_AlbumLarge_ShortTitle(t *testing.T) {
 
 func TestGenerateStatus_AlbumSmall_LongTitle(t *testing.T) {
 	link := fmt.Sprintf("http://i.imgur.com/%s.jpg", id)
-	result := &Result{
+	r := &result{
 		ID:    id,
 		Link:  link,
 		Title: longTitle,
 	}
 
 	expected := fmt.Sprintf("%s (%s)", longTitle, gallery)
-	got := generateStatus(result, false)
+	got := generateStatus(r, false)
 
 	if len(got) > 142 {
 		t.Errorf("Title is longer than 140 characters: %d", len(got))
@@ -135,14 +135,14 @@ func TestGenerateStatus_AlbumSmall_LongTitle(t *testing.T) {
 
 func TestGenerateStatus_AlbumSmall_ShortTitle(t *testing.T) {
 	link := fmt.Sprintf("http://i.imgur.com/%s.jpg", id)
-	result := &Result{
+	r := &result{
 		ID:    id,
 		Link:  link,
 		Title: shortTitle,
 	}
 
 	expected := fmt.Sprintf("%s (%s)", shortTitle, gallery)
-	got := generateStatus(result, false)
+	got := generateStatus(r, false)
 
 	if len(got) > 142 {
 		t.Errorf("Title is longer than 140 characters: %d", len(got))
@@ -155,14 +155,14 @@ func TestGenerateStatus_AlbumSmall_ShortTitle(t *testing.T) {
 
 func TestGenerateStatus_ImageLarge_LongTitle(t *testing.T) {
 	link := fmt.Sprintf("http://i.imgur.com/%s.jpg", id)
-	result := &Result{
+	r := &result{
 		ID:    id,
 		Link:  link,
 		Title: longTitle,
 	}
 
 	expected := fmt.Sprintf("%s %s (%s)", cutTitle, link, gallery)
-	got := generateStatus(result, true)
+	got := generateStatus(r, true)
 
 	if len(got) > 142 {
 		t.Errorf("Title is longer than 140 characters: %d", len(got))
